@@ -1,0 +1,133 @@
+@page "/insert-patient"
+@using HospitalApp.Data
+@using HospitalApp.Models
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components
+@inject ApplicationDbContext DbContext
+@rendermode InteractiveServer
+
+<h3>填写病人病例信息</h3>
+
+@if (showSuccessMessage)
+{
+    <div class="alert alert-success" role="alert">
+        提交成功
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger" role="alert">
+        @errorMessage
+    </div>
+}
+
+<div>
+    <!-- 手动验证信息显示 -->
+    @if (validationErrors.Count > 0)
+    {
+        <div class="alert alert-danger" role="alert">
+            @foreach (var error in validationErrors)
+            {
+                <div>@error</div>
+            }
+        </div>
+    }
+
+    <!-- 使用 EditForm 组件 -->
+    <EditForm Model="@patient" OnValidSubmit="@HandleSubmit">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+
+        <div class="mb-3">
+            <label for="name" class="form-label">姓名</label>
+            <InputText id="name" @bind-Value="@patient.Name" class="form-control" />
+        </div>
+
+        <div class="mb-3">
+            <label for="age" class="form-label">年龄</label>
+            <InputNumber id="age" @bind-Value="@patient.Age" class="form-control" />
+        </div>
+
+        <div class="mb-3">
+            <label for="gender" class="form-label">性别</label>
+            <InputText id="gender" @bind-Value="@patient.Gender" class="form-control" />
+        </div>
+
+        <div class="mb-3">
+            <label for="symptoms" class="form-label">症状</label>
+            <InputTextArea id="symptoms" @bind-Value="@patient.Symptoms" class="form-control" />
+        </div>
+
+        <div class="mb-3">
+            <label for="prescription" class="form-label">处方</label>
+            <InputTextArea id="prescription" @bind-Value="@patient.Prescription" class="form-control" />
+        </div>
+
+        <button class="btn btn-primary" type="submit" disabled="@isSubmitting">
+            @if (isSubmitting)
+            {
+                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                <span>提交中...</span>
+            }
+            else
+            {
+                <span>提交</span>
+            }
+        </button>
+    </EditForm>
+</div>
+
+@code {
+    private Patient patient = new Patient();
+    private bool showSuccessMessage = false;
+    private string errorMessage = string.Empty;
+    private List<string> validationErrors = new List<string>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // 确保数据库和表存在
+        await DbContext.Database.EnsureCreatedAsync();
+        Console.WriteLine("数据库和表已确认存在");
+        if (DbContext.Patients == null)
+        {
+            Console.WriteLine("DbContext.Patients 为 null");
+        }
+        else
+        {
+            Console.WriteLine("DbContext.Patients 可用");
+        }
+    }
+
+    private bool isSubmitting = false; // 新增提交状态标志
+
+    private async Task HandleSubmit()
+    {
+        if (isSubmitting) return;
+        
+        isSubmitting = true;
+        try
+        {
+            Console.WriteLine("HandleSubmit 方法开始执行");
+            validationErrors.Clear();
+
+            DbContext.Patients.Add(patient);
+            await DbContext.SaveChangesAsync();
+            showSuccessMessage = true;
+            errorMessage = string.Empty;
+            patient = new Patient();
+        }
+        catch (Exception ex)
+        {
+            showSuccessMessage = false;
+            errorMessage = $"提交失败: {ex.Message}";
+            Console.WriteLine($"Error: {ex.ToString()}");
+        }
+        finally
+        {
+            isSubmitting = false;
+            StateHasChanged(); // 手动触发组件重新渲染
+        }
+    }
+}

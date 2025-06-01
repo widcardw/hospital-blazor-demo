@@ -1,0 +1,575 @@
+@page "/query-patients"
+@using HospitalApp.Data
+@using HospitalApp.Models
+@using Microsoft.EntityFrameworkCore;
+@using ClosedXML.Excel
+@using System.IO
+@inject ApplicationDbContext DbContext
+@inject IJSRuntime JSRuntime
+@rendermode InteractiveServer
+
+
+<h3 class="d-flex align-items-center">
+    查询病人病例信息
+    <button class="btn btn-success" @onclick="OpenExportDialog">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" class="bi bi-file-earmark-excel"
+            viewBox="0 0 16 16">
+            <path
+                d="M5.884 6.68a.5.5 0 1 0-.768.64L7.349 10l-2.233 2.68a.5.5 0 0 0 .768.64L8 10.781l2.116 2.54a.5.5 0 0 0 .768-.641L8.651 10l2.233-2.68a.5.5 0 0 0-.768-.64L8 9.219l-2.116-2.54z" />
+            <path
+                d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2zM9.5 3A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h5.5v2z" />
+        </svg>
+        导出Excel
+    </button>
+</h3>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-2">
+                <label class="form-label">姓名</label>
+                <input type="text" class="form-control" @bind="searchName" @bind:event="oninput"
+                    placeholder="输入姓名..." />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">性别</label>
+                <select class="form-select" @bind="searchGender">
+                    <option value="">全部</option>
+                    <option value="男">男</option>
+                    <option value="女">女</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">症状</label>
+                <input type="text" class="form-control" @bind="searchSymptoms" @bind:event="oninput"
+                    placeholder="输入症状关键词..." />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">处方</label>
+                <input type="text" class="form-control" @bind="searchPrescription" @bind:event="oninput"
+                    placeholder="输入处方关键词..." />
+            </div>
+            <div class="col-md-1">
+                <button class="btn btn-primary w-100" @onclick="LoadPatients">
+                    搜索
+                </button>
+            </div>
+            <div class="col-md-1">
+                <button class="btn btn-secondary w-100" @onclick="ClearSearch">
+                    清空
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>姓名</th>
+            <th>年龄</th>
+            <th>性别</th>
+            <th>症状</th>
+            <th>处方</th>
+            <th>操作</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var patient in patients)
+        {
+            <tr>
+                <td>@patient.Name</td>
+                <td>@patient.Age</td>
+                <td>@patient.Gender</td>
+                <td>@patient.Symptoms</td>
+                <td>@patient.Prescription</td>
+                <td>
+                    <button class="btn btn-secondary" @onclick="@(() => OpenEditDialog(patient))">编辑</button>
+                    <button class="btn btn-danger" @onclick="@(() => OpenDeleteConfirm(patient))">删除</button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<nav aria-label="Page navigation">
+    <ul class="pagination">
+        <li class="page-item @(currentPage == 1 ? "disabled" : "")">
+            <button class="page-link" @onclick="PreviousPage" disabled="@(currentPage == 1)">上一页</button>
+        </li>
+        @for (int i = 1; i <= totalPages; i++)
+        {
+            <li class="page-item @(i == currentPage ? "active" : "")">
+                <button class="page-link" @onclick="@(() => ChangePage(i))">@i</button>
+            </li>
+        }
+        <li class="page-item @(currentPage == totalPages ? "disabled" : "")">
+            <button class="page-link" @onclick="NextPage" disabled="@(currentPage == totalPages)">下一页</button>
+        </li>
+    </ul>
+    <div>
+        <label for="pageSize" class="form-label">共 @totalCount 条记录 每页记录数</label>
+        <input type="number" id="pageSize" @bind-value="@pageSize" class="form-control" min="1" aria-label="每页记录数" />
+    </div>
+</nav>
+
+@code {
+    private List<Patient> patients = new List<Patient>();
+    private int currentPage = 1;
+    private int pageSize = 10;
+    private int totalPages = 0;
+    private int totalCount = 0;
+
+    // 搜索条件
+    private string searchName = "";
+    private string searchGender = "";
+    private string searchSymptoms = "";
+    private string searchPrescription = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        // 确保数据库和表存在
+        await DbContext.Database.EnsureCreatedAsync();
+        await LoadPatients();
+    }
+
+    private async void ClearSearch() 
+    {
+        searchName = "";
+        searchGender = "";
+        searchSymptoms = "";
+        searchPrescription = "";
+        await LoadPatients();
+    }
+
+    private async Task LoadPatients()
+    {
+        var query = DbContext.Patients.AsQueryable();
+
+        // 应用搜索条件
+        if (!string.IsNullOrWhiteSpace(searchName))
+        {
+            query = query.Where(p => p.Name.Contains(searchName));
+        }
+
+        if (!string.IsNullOrWhiteSpace(searchGender))
+        {
+            query = query.Where(p => p.Gender == searchGender);
+        }
+
+        if (!string.IsNullOrWhiteSpace(searchSymptoms))
+        {
+            query = query.Where(p => p.Symptoms.Contains(searchSymptoms));
+        }
+
+        if (!string.IsNullOrWhiteSpace(searchPrescription))
+        {
+            query = query.Where(p => p.Prescription.Contains(searchPrescription));
+        }
+
+        // 计算总记录数和总页数
+        totalCount = await query.CountAsync();
+        totalPages = (int)Math.Ceiling((double)totalCount / pageSize);
+
+        // 获取当前页的数据
+        patients = await query
+        .Skip((currentPage - 1) * pageSize)
+        .Take(pageSize)
+        .ToListAsync();
+
+        // 重置到第一页（仅在搜索条件改变时）
+        if (currentPage > totalPages && totalPages > 0)
+        {
+            currentPage = 1;
+            await LoadPatients();
+        }
+    }
+
+    private async Task PreviousPage()
+    {
+        if (currentPage > 1)
+        {
+            currentPage--;
+            await LoadPatients();
+        }
+    }
+
+    private async Task NextPage()
+    {
+        if (currentPage < totalPages)
+        {
+            currentPage++;
+            await LoadPatients();
+        }
+    }
+
+    private async Task ChangePage(int pageNumber)
+    {
+        currentPage = pageNumber;
+        await LoadPatients();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadPatients();
+    }
+}
+
+@if (showEditDialog)
+{
+    <div class="modal" style="display:block; background-color: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">编辑病人信息</h5>
+                    <button type="button" class="btn-close" @onclick="CloseEditDialog"></button>
+                </div>
+                <div class="modal-body">
+                    <EditForm Model="@editPatient" OnValidSubmit="@HandleUpdate">
+                        <DataAnnotationsValidator />
+                        <ValidationSummary />
+
+                        <div class="mb-3">
+                            <label class="form-label">姓名</label>
+                            <InputText @bind-Value="@editPatient.Name" class="form-control" />
+                        </div>
+
+                        <!-- 其他字段类似添加 -->
+                        <div class="mb-3">
+                            <label class="form-label">年龄</label>
+                            <InputNumber @bind-Value="@editPatient.Age" class="form-control" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">性别</label>
+                            <InputText @bind-Value="@editPatient.Gender" class="form-control" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">症状</label>
+                            <InputTextArea @bind-Value="@editPatient.Symptoms" class="form-control" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">处方</label>
+                            <InputTextArea @bind-Value="@editPatient.Prescription" class="form-control" />
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" disabled="@isUpdating">
+                            @if (isUpdating)
+                            {
+                                <span class="spinner-border spinner-border-sm"></span>
+                                <span>更新中...</span>
+                            }
+                            else
+                            {
+                                <span>更新</span>
+                            }
+                        </button>
+                    </EditForm>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showDeleteConfirm)
+{
+    <div class="modal" style="display:block; background-color: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">确认删除</h5>
+                    <button type="button" class="btn-close" @onclick="CloseDeleteConfirm"></button>
+                </div>
+                <div class="modal-body">
+                    <p>确定要删除病人 @deletePatient?.Name 的记录吗？</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseDeleteConfirm">取消</button>
+                    <button type="button" class="btn btn-danger" @onclick="ConfirmDelete">确认删除</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(operationMessage))
+{
+    <div class="mt-3 alert @(isOperationSuccess ? "alert-success" : "alert-danger")">
+        @operationMessage
+    </div>
+}
+
+<!-- 导出对话框 -->
+<div class="modal @(showExportDialog ? "show" : "")"
+    style="display:@(showExportDialog ? "block" : "none"); background-color: rgba(0,0,0,0.5)">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">导出Excel</h5>
+                <button type="button" class="btn-close" @onclick="CloseExportDialog"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="exportType" id="exportAll" value="all"
+                            checked="@(exportType == "all")" @onchange="@(e => exportType = "all")" />
+                        <label class="form-check-label" for="exportAll">
+                            全部导出到一个Excel文件
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="exportType" id="exportBatch" value="batch"
+                            checked="@(exportType == "batch")" @onchange="@(e => exportType = "batch")" />
+                        <label class="form-check-label" for="exportBatch">
+                            按指定数量分批导出
+                        </label>
+                    </div>
+                </div>
+                @if (exportType == "batch")
+                {
+                    <div class="mb-3">
+                        <label class="form-label">每个文件的记录数：</label>
+                        <input type="number" class="form-control" @bind="batchSize" min="1" />
+                    </div>
+                }
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" @onclick="CloseExportDialog">取消</button>
+                <button type="button" class="btn btn-primary" @onclick="ExportToExcel">
+                    @if (isExporting)
+                    {
+                        <span class="spinner-border spinner-border-sm"></span>
+                        <span>导出中...</span>
+                    }
+                    else
+                    {
+                        <span>确认导出</span>
+                    }
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private Patient editPatient = new();
+    private Patient? deletePatient;
+    private bool showEditDialog;
+    private bool showDeleteConfirm;
+    private bool isUpdating;
+    private string operationMessage = "";
+    private bool isOperationSuccess;
+
+    // 导出相关变量
+    private bool showExportDialog = false;
+    private string exportType = "all";
+    private int batchSize = 2000;
+    private bool isExporting = false;
+
+    private void OpenExportDialog()
+    {
+        showExportDialog = true;
+    }
+
+    private void CloseExportDialog()
+    {
+        showExportDialog = false;
+    }
+
+    private async Task ExportToExcel()
+    {
+        if (isExporting) return;
+        isExporting = true;
+        operationMessage = "";
+
+        try
+        {
+            var allPatients = await DbContext.Patients
+            .OrderBy(p => p.Id)
+            .ToListAsync();
+
+            if (!allPatients.Any())
+            {
+                throw new Exception("没有可导出的数据");
+            }
+
+            if (exportType == "all")
+            {
+                await ExportPatientsToExcel(allPatients, "患者数据.xlsx");
+            }
+            else
+            {
+                var batches = (int)Math.Ceiling(allPatients.Count / (double)batchSize);
+                for (int i = 0; i < batches; i++)
+                {
+                    var batchPatients = allPatients.Skip(i * batchSize).Take(batchSize).ToList();
+                    await ExportPatientsToExcel(batchPatients, $"患者数据_第{i + 1}批.xlsx");
+                }
+            }
+
+            operationMessage = "导出成功！";
+            isOperationSuccess = true;
+            showExportDialog = false;
+        }
+        catch (Exception ex)
+        {
+            operationMessage = $"导出失败：{ex.Message}";
+            isOperationSuccess = false;
+        }
+        finally
+        {
+            isExporting = false;
+        }
+    }
+
+    private async Task ExportPatientsToExcel(List<Patient> patientsToExport, string fileName)
+    {
+        using var workbook = new XLWorkbook();
+        var worksheet = workbook.Worksheets.Add("患者信息");
+
+        // 设置表头
+        worksheet.Cell(1, 1).Value = "ID";
+        worksheet.Cell(1, 2).Value = "姓名";
+        worksheet.Cell(1, 3).Value = "性别";
+        worksheet.Cell(1, 4).Value = "年龄";
+        worksheet.Cell(1, 5).Value = "症状";
+        worksheet.Cell(1, 6).Value = "处方";
+
+        // 设置表头样式
+        var headerRow = worksheet.Row(1);
+        headerRow.Style.Font.Bold = true;
+        headerRow.Style.Fill.BackgroundColor = XLColor.LightGray;
+
+        // 填充数据
+        for (int i = 0; i < patientsToExport.Count; i++)
+        {
+            var patient = patientsToExport[i];
+            var row = i + 2;
+
+            worksheet.Cell(row, 1).Value = patient.Id;
+            worksheet.Cell(row, 2).Value = patient.Name;
+            worksheet.Cell(row, 3).Value = patient.Gender;
+            worksheet.Cell(row, 4).Value = patient.Age;
+            worksheet.Cell(row, 5).Value = patient.Symptoms;
+            worksheet.Cell(row, 6).Value = patient.Prescription;
+        }
+
+        // 自动调整列宽
+        worksheet.Columns().AdjustToContents();
+
+        // 保存到内存流
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Position = 0;
+
+        // 转换为base64并通过JavaScript下载
+        var base64 = Convert.ToBase64String(stream.ToArray());
+        await JSRuntime.InvokeVoidAsync("downloadFileFromBase64", base64, fileName);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await JSRuntime.InvokeVoidAsync("eval", @"
+window.downloadFileFromBase64 = function(base64, fileName) {
+var link = document.createElement('a');
+link.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + base64;
+link.download = fileName;
+document.body.appendChild(link);
+link.click();
+document.body.removeChild(link);
+}
+");
+        }
+    }
+
+    private void OpenEditDialog(Patient patient)
+    {
+        editPatient = new Patient
+        {
+            Id = patient.Id,
+            Name = patient.Name,
+            Age = patient.Age,
+            Gender = patient.Gender,
+            Symptoms = patient.Symptoms,
+            Prescription = patient.Prescription
+        };
+        showEditDialog = true;
+    }
+
+    private void CloseEditDialog()
+    {
+        showEditDialog = false;
+    }
+
+    private async Task HandleUpdate()
+    {
+        isUpdating = true;
+        try
+        {
+            var existingPatient = await DbContext.Patients.FindAsync(editPatient.Id);
+            if (existingPatient != null)
+            {
+                existingPatient.Name = editPatient.Name;
+                existingPatient.Age = editPatient.Age;
+                existingPatient.Gender = editPatient.Gender;
+                existingPatient.Symptoms = editPatient.Symptoms;
+                existingPatient.Prescription = editPatient.Prescription;
+
+                await DbContext.SaveChangesAsync();
+                operationMessage = "更新成功";
+                isOperationSuccess = true;
+                showEditDialog = false;
+                await LoadPatients();
+            }
+        }
+        catch (Exception ex)
+        {
+            operationMessage = $"更新失败: {ex.Message}";
+            isOperationSuccess = false;
+        }
+        finally
+        {
+            isUpdating = false;
+        }
+    }
+
+    private void OpenDeleteConfirm(Patient patient)
+    {
+        deletePatient = patient;
+        showDeleteConfirm = true;
+    }
+
+    private void CloseDeleteConfirm()
+    {
+        showDeleteConfirm = false;
+    }
+
+    private async Task ConfirmDelete()
+    {
+        if (deletePatient != null)
+        {
+            try
+            {
+                var patientToDelete = await DbContext.Patients.FindAsync(deletePatient.Id);
+                if (patientToDelete != null)
+                {
+                    DbContext.Patients.Remove(patientToDelete);
+                    await DbContext.SaveChangesAsync();
+                    operationMessage = "删除成功";
+                    isOperationSuccess = true;
+                    showDeleteConfirm = false;
+                    await LoadPatients();
+                }
+            }
+            catch (Exception ex)
+            {
+                operationMessage = $"删除失败: {ex.Message}";
+                isOperationSuccess = false;
+            }
+        }
+    }
+}
