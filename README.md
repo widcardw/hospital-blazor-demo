@@ -22,6 +22,7 @@ dotnet restore
 ## 运行
 
 ```sh
+cd HospitalApp
 dotnet run
 ```
 
